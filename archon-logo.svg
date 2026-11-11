@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="archonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="50%" stop-color="#1D4ED8" />
+      <stop offset="100%" stop-color="#1E3A8A" />
+    </linearGradient>
+  </defs>
+  <path d="M20 86 L80 86 L80 78 L20 78 Z" fill="url(#archonGrad)" />
+  <path d="M26 78 L34 78 L34 32 L26 32 Z" fill="url(#archonGrad)" />
+  <path d="M46 78 L54 78 L54 22 L46 22 Z" fill="url(#archonGrad)" />
+  <path d="M66 78 L74 78 L74 32 L66 32 Z" fill="url(#archonGrad)" />
+  <path d="M16 28 L50 12 L84 28 L80 34 L50 20 L20 34 Z" fill="url(#archonGrad)" />
+  <circle cx="50" cy="12" r="4" fill="#60A5FA" />
+</svg>

@@ -1,0 +1,15 @@
+name: corredor
+
+functions:
+  exec:
+    kind: function
+    meta:
+      short: Corredor automation script executor
+      description: Executes script in Corredor Automation server
+    params:
+      script: { meta: { label: Script }, types: [ { wf: String } ], required: true }
+      args:  { meta: { label: Arguments }, types: [ { wf: Vars, go: '*expr.Vars' } ] }
+    results:
+      results:
+        wf: Vars
+        go: '*expr.Vars'

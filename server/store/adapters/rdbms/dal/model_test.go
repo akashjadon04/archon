@@ -1,0 +1,982 @@
+package dal_test
+
+import (
+	"context"
+	"fmt"
+	"github.com/cortezaproject/corteza/server/pkg/dal"
+	"github.com/cortezaproject/corteza/server/pkg/filter"
+	"github.com/cortezaproject/corteza/server/pkg/logger"
+	"github.com/cortezaproject/corteza/server/pkg/ql"
+	. "github.com/cortezaproject/corteza/server/store/adapters/rdbms/dal"
+	"github.com/spf13/cast"
+	"github.com/stretchr/testify/require"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestModel_Search(t *testing.T) {
+	_ = logger.Default()
+
+	const (
+		items = 1000
+	)
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "price", Type: &dal.TypeNumber{}, Filterable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	bm := time.Now()
+	ctx = context.Background() // no need to log inserts
+	count := 0
+	for i := 1; i <= items; i++ {
+		req.NoError(m.Create(ctx, &kv{
+			"item":      fmt.Sprintf("i%d", i),
+			"group":     fmt.Sprintf("g%d", i%1000),
+			"price":     i,
+			"published": i%2 == 0,
+		}))
+		count++
+	}
+
+	t.Logf("Inserted %d entries in %v", count, time.Now().Sub(bm))
+
+	t.Log("Search through records, filter out published")
+	i, err = m.Search(filter.Generic(
+		filter.WithExpression("published"),
+		filter.WithOrderBy(filter.SortExprSet{
+			&filter.SortExpr{Column: "group"},
+		}),
+	))
+
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0, 5)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, items/2)
+	req.Equal("group=g0 item=i1000 price=1000 published=1", rows[0].String())
+}
+
+// Should be part of general DAL testing (not only RDBMS)
+func TestModel_Search2(t *testing.T) {
+	var (
+		req = require.New(t)
+
+		ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: func() (aa []*dal.Attribute) {
+				s := &dal.CodecRecordValueSetJSON{Ident: "values"}
+				aa = []*dal.Attribute{
+					{Ident: "phyTxt", Type: &dal.TypeText{}},
+					{Ident: "phyNum", Type: &dal.TypeNumber{}},
+					{Ident: "phyBool", Type: &dal.TypeBoolean{}},
+					{Ident: "jsonEncTxt", Type: &dal.TypeText{}, Store: s},
+					{Ident: "jsonEncTxtMV", Type: &dal.TypeText{}, Store: s, MultiValue: true},
+					{Ident: "jsonEncNum", Type: &dal.TypeNumber{}, Store: s},
+					{Ident: "jsonEncNumMV", Type: &dal.TypeNumber{}, Store: s, MultiValue: true},
+					{Ident: "jsonEncBool", Type: &dal.TypeBoolean{}, Store: s},
+					{Ident: "jsonEncBoolMV", Type: &dal.TypeBoolean{}, Store: s, MultiValue: true},
+				}
+
+				// iterate through all attributsand set Filterable flag to true
+				for _, a := range aa {
+					a.Filterable = true
+					a.Sortable = true
+				}
+
+				return
+			}(),
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		search = func(t *testing.T, f filter.Filter) []kv {
+			req := require.New(t)
+			i, err := m.Search(f)
+
+			req.NoError(err)
+			req.NotNil(i)
+
+			defer req.NoError(i.Close())
+
+			ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+			rows := make([]kv, 0, 5)
+			for i.Next(ctx) {
+				row := kv{}
+				req.NoError(i.Scan(row))
+				rows = append(rows, row)
+			}
+
+			req.NoError(i.Err())
+			return rows
+		}
+	)
+
+	table, err := s.DataDefiner.ConvertModel(baseModel)
+	req.NoError(err)
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	{
+		noLogCtx := context.Background() // no need to log inserts
+		req.NoError(m.Create(noLogCtx, (&kvv{}).
+			Set("phyTxt", "bar").
+			Set("phyNum", 42).
+			Set("phyBool", false).
+			Set("jsonEncTxt", "bar").
+			Set("jsonEncTxtMV", "bar", "foo").
+			Set("jsonEncNum", 42).
+			Set("jsonEncNumMV", 21, 42).
+			Set("jsonEncBool", false).
+			Set("jsonEncBoolMV", false, true),
+		))
+	}
+
+	t.Run("comparing single value attributes", func(t *testing.T) {
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt = 'bar'"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt = 'baz'"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum = 42"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum = 21"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("!phyBool"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyBool"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxt = 'bar'"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxt = 'baz'"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNum = 42"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNum = 21"))), 0)
+	})
+
+	t.Run("comparing 1st value in multi value attributes", func(t *testing.T) {
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV = 'bar'"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV = 'baz'"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV = 'foo'"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV = 21"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV = 22"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV = 42"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncBoolMV"))), 0)
+	})
+
+	t.Run("comparing all values in multi value attributes", func(t *testing.T) {
+		req.Len(search(t, filter.Generic(filter.WithExpression("42 IN jsonEncNumMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("84 IN jsonEncNumMV"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("84 NOT IN jsonEncNumMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("'foo' IN jsonEncTxtMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("'baz' IN jsonEncTxtMV"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("true IN jsonEncBoolMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("false IN jsonEncBoolMV"))), 1)
+	})
+
+	t.Run("comparing all values in multi value attributes with another attribute", func(t *testing.T) {
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum IN jsonEncNumMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN jsonEncNumMV"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN jsonEncTxtMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyBool IN jsonEncTxtMV"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyBool IN jsonEncBoolMV"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN jsonEncBoolMV"))), 0)
+	})
+
+	t.Run("comparing with list of values", func(t *testing.T) {
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN (null, 'bar')"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN (null, 'baz')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN ('baz', 'qux', 'bar')"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt NOT IN ('baz', 'bar')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt IN ('bar')"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyTxt NOT IN ('bar')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum IN (null, 42)"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum BETWEEN 40 AND 50"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum BETWEEN 40 AND 50 AND phyTxt = 'bar'"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum NOT BETWEEN 40 AND 50"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("phyNum IN (null, 21)"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxt IN (null, 'bar')"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxt IN (null, 'baz')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV IN (null, 'bar')"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV IN (null, 'baz')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncTxtMV IN (null, 'foo')"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNum IN (null, 42)"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNum IN (null, 21)"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV IN (null, 21)"))), 1)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV IN (null, 22)"))), 0)
+		req.Len(search(t, filter.Generic(filter.WithExpression("jsonEncNumMV IN (null, 42)"))), 0)
+	})
+
+}
+
+func TestModel_Aggregate(t *testing.T) {
+	_ = logger.Default()
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "quantity", Type: &dal.TypeNumber{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Filterable: true},
+				{Ident: "price", Type: &dal.TypeNumber{}, Filterable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"item": "i1", "date": "2022-10-06", "group": "g1", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i2", "date": "2022-10-06", "group": "g1", "price": "3000", "quantity": "30", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i3", "date": "2022-10-06", "group": "g2", "price": "4000", "quantity": "40", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i4", "date": "2022-10-06", "group": "g2", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i5", "date": "2022-10-07", "group": "g2", "price": "1000", "quantity": "10", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i6", "date": "2022-10-07", "group": "g2", "price": "5000", "quantity": "50", "published": true}))
+
+	t.Log("Aggregating all records, calculating min & max price per group")
+	i, err = m.Aggregate(
+		filter.Generic(
+			filter.WithExpression("published"),
+			filter.WithOrderBy(filter.SortExprSet{
+				&filter.SortExpr{Column: "group", Descending: true},
+				&filter.SortExpr{Column: "date", Descending: false},
+			}),
+		),
+		// group-by
+		[]dal.AggregateAttr{
+			{Identifier: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+			{Identifier: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+		},
+		// aggregation expressions
+		[]dal.AggregateAttr{
+			{Identifier: "count", RawExpr: "COUNT(*)", Type: &dal.TypeNumber{}},
+			{Identifier: "max", RawExpr: "MAX(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "min", RawExpr: "MIN(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "avg", RawExpr: "AVG(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "stock", RawExpr: "SUM(quantity)", Type: &dal.TypeNumber{}},
+		},
+		nil, // <== here be having condition
+	)
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0, 3)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+
+		// due to difference of number of decimal digits in different DBs, we need to do this
+		// to make sure we get the same result
+		row["avg"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["avg"]))
+		row["stock"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["stock"]))
+
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, 3)
+	req.Equal("avg=1000.00 count=1 date=2022-10-06 group=g2 max=1000 min=1000 stock=10.00", rows[0].String())
+	req.Equal("avg=5000.00 count=1 date=2022-10-07 group=g2 max=5000 min=5000 stock=50.00", rows[1].String())
+	req.Equal("avg=2000.00 count=2 date=2022-10-06 group=g1 max=3000 min=1000 stock=40.00", rows[2].String())
+}
+
+func TestModel_AggregationModelIdentifiers(t *testing.T) {
+	_ = logger.Default()
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: "t",
+			Attributes: []*dal.Attribute{
+				{Ident: "group", Type: &dal.TypeText{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"group": "g1"}))
+	req.NoError(m.Create(ctx, &kv{"group": "g1"}))
+	req.NoError(m.Create(ctx, &kv{"group": "g2"}))
+	req.NoError(m.Create(ctx, &kv{"group": "g2"}))
+	req.NoError(m.Create(ctx, &kv{"group": "g2"}))
+
+	t.Log("Aggregating all records, calculating min & max price per group")
+	i, err = m.Aggregate(
+		filter.Generic(
+			filter.WithOrderBy(filter.SortExprSet{
+				&filter.SortExpr{Column: "grp", Descending: true},
+			}),
+		),
+		// group-by
+		[]dal.AggregateAttr{
+			{Identifier: "grp", RawExpr: "CONCAT(group, 'x')", Type: &dal.TypeText{}},
+		},
+		// aggregation expressions
+		[]dal.AggregateAttr{
+			{Identifier: "total", RawExpr: "COUNT(*)", Type: &dal.TypeNumber{}},
+		},
+		// having
+		qlParse(req, "total = 3"),
+	)
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, 1)
+	req.Equal("grp=g2x total=3", rows[0].String())
+}
+
+func TestModel_AggregateWithHaving(t *testing.T) {
+	_ = logger.Default()
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "quantity", Type: &dal.TypeNumber{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Filterable: true},
+				{Ident: "price", Type: &dal.TypeNumber{}, Filterable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"item": "i1", "date": "2022-10-06", "group": "g1", "price": "1000", "quantity": "0", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i2", "date": "2022-10-06", "group": "g1", "price": "3000", "quantity": "0", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i3", "date": "2022-10-06", "group": "g2", "price": "4000", "quantity": "40", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i4", "date": "2022-10-06", "group": "g2", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i5", "date": "2022-10-07", "group": "g2", "price": "1000", "quantity": "10", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i6", "date": "2022-10-07", "group": "g2", "price": "5000", "quantity": "50", "published": true}))
+
+	t.Log("Aggregating all records, calculating min & max price per group, ignoring empty quantity")
+	i, err = m.Aggregate(
+		filter.Generic(
+			filter.WithExpression("published"),
+			filter.WithOrderBy(filter.SortExprSet{
+				&filter.SortExpr{Column: "group", Descending: true},
+				&filter.SortExpr{Column: "date", Descending: false},
+			}),
+		),
+		// group-by
+		[]dal.AggregateAttr{
+			{Identifier: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+			{Identifier: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+		},
+		// aggregation expressions
+		[]dal.AggregateAttr{
+			{Identifier: "count", RawExpr: "COUNT(*)", Type: &dal.TypeNumber{}},
+			{Identifier: "max", RawExpr: "MAX(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "min", RawExpr: "MIN(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "avg", RawExpr: "AVG(price)", Type: &dal.TypeNumber{}},
+			{Identifier: "stock", RawExpr: "SUM(quantity)", Type: &dal.TypeNumber{}},
+		},
+		// having
+		qlParse(req, "SUM(quantity) > 0"),
+	)
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0, 3)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+
+		// due to difference of number of decimal digits in different DBs, we need to do this
+		// to make sure we get the same result
+		row["avg"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["avg"]))
+		row["stock"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["stock"]))
+
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, 2)
+	req.Equal("avg=1000.00 count=1 date=2022-10-06 group=g2 max=1000 min=1000 stock=10.00", rows[0].String())
+	req.Equal("avg=5000.00 count=1 date=2022-10-07 group=g2 max=5000 min=5000 stock=50.00", rows[1].String())
+}
+
+func TestModel_AggregateHavingGroup(t *testing.T) {
+	_ = logger.Default()
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "grp", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true, Filterable: true},
+				{Ident: "quantity", Type: &dal.TypeNumber{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Filterable: true},
+				{Ident: "price", Type: &dal.TypeNumber{}, Filterable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"item": "i1", "date": "2022-10-06", "grp": "g1", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i2", "date": "2022-10-06", "grp": "g1", "price": "3000", "quantity": "30", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i3", "date": "2022-10-06", "grp": "g2", "price": "4000", "quantity": "40", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i4", "date": "2022-10-06", "grp": "g2", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i5", "date": "2022-10-07", "grp": "g2", "price": "1000", "quantity": "10", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i6", "date": "2022-10-07", "grp": "g2", "price": "5000", "quantity": "50", "published": true}))
+
+	t.Log("Aggregating all records, calculating min & max price per group")
+	i, err = m.Aggregate(
+		filter.Generic(),
+		// group-by
+		[]dal.AggregateAttr{
+			{Identifier: "agg", Expression: &ql.ASTNode{Symbol: "grp"}, Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+		},
+		// aggregation expressions
+		[]dal.AggregateAttr{
+			{Identifier: "count", RawExpr: "COUNT(*)", Type: &dal.TypeNumber{}},
+		},
+		qlParse(req, "agg = 'g1'"),
+	)
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0, 1)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, 1)
+	req.Equal("agg=g1 count=2", rows[0].String())
+}
+
+func TestModel_Distinct(t *testing.T) {
+	_ = logger.Default()
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"item": "i1", "group": "g1", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i2", "group": "g1", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i3", "group": "g2", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i4", "group": "g2", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i5", "group": "g3", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i6", "group": "g3", "published": false}))
+
+	t.Log("Aggregating all records, returning distinct groups")
+	i, err = m.Aggregate(
+		filter.Generic(
+			filter.WithExpression("published"),
+			filter.WithOrderBy(filter.SortExprSet{
+				&filter.SortExpr{Column: "group"},
+			})),
+		// group-by
+		[]dal.AggregateAttr{
+			{Identifier: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+		},
+		nil,
+		nil, // <== here be having condition
+	)
+	req.NoError(err)
+	req.NotNil(i)
+
+	defer req.NoError(i.Close())
+
+	t.Log("Iterating over results")
+	rows := make([]kv, 0, 2)
+	for i.Next(ctx) {
+		row = kv{}
+		req.NoError(i.Scan(row))
+
+		rows = append(rows, row)
+	}
+
+	req.NoError(i.Err())
+	req.Len(rows, 2)
+	req.Equal("group=g1", rows[0].String())
+	req.Equal("group=g2", rows[1].String())
+}
+
+func TestModel_AggregateWithCursors(t *testing.T) {
+	_ = logger.Default()
+
+	var (
+		req = require.New(t)
+
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				{Ident: "item", Type: &dal.TypeText{}},
+				{Ident: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+				{Ident: "quantity", Type: &dal.TypeNumber{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Filterable: true},
+				{Ident: "price", Type: &dal.TypeNumber{}, Filterable: true},
+				{Ident: "published", Type: &dal.TypeBoolean{}, Filterable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		i dal.Iterator
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+		row        kv
+
+		cur *filter.PagingCursor
+
+		results = []string{
+			"avg=1000.00 count=1 date=2022-10-06 group=g2 max=1000 min=1000 stock=10.00",
+			"avg=5000.00 count=1 date=2022-10-07 group=g2 max=5000 min=5000 stock=50.00",
+			"",
+		}
+	)
+
+	ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+	t.Logf("Creating temporary table %q", table.Ident)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"item": "i1", "date": "2022-10-06", "group": "g1", "price": "1000", "quantity": "0", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i2", "date": "2022-10-06", "group": "g1", "price": "3000", "quantity": "0", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i3", "date": "2022-10-06", "group": "g2", "price": "4000", "quantity": "40", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i4", "date": "2022-10-06", "group": "g2", "price": "1000", "quantity": "10", "published": true}))
+	req.NoError(m.Create(ctx, &kv{"item": "i5", "date": "2022-10-07", "group": "g2", "price": "1000", "quantity": "10", "published": false}))
+	req.NoError(m.Create(ctx, &kv{"item": "i6", "date": "2022-10-07", "group": "g2", "price": "5000", "quantity": "50", "published": true}))
+
+	// fetching two pages
+	for p, result := range results {
+		t.Logf("#%d Aggregating all records, calculating min & max price per group, ignoring empty quantity", p+1)
+		i, err = m.Aggregate(
+			filter.Generic(
+				filter.WithCursor(cur),
+				filter.WithLimit(1),
+				filter.WithExpression("published"),
+				filter.WithOrderBy(filter.SortExprSet{
+					&filter.SortExpr{Column: "group", Descending: true},
+					&filter.SortExpr{Column: "date", Descending: false},
+				}),
+			),
+			// group-by
+			[]dal.AggregateAttr{
+				{Identifier: "date", Type: &dal.TypeDate{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+				{Identifier: "group", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}},
+			},
+			// aggregation expressions
+			[]dal.AggregateAttr{
+				{Identifier: "count", RawExpr: "COUNT(*)", Type: &dal.TypeNumber{}},
+				{Identifier: "max", RawExpr: "MAX(price)", Type: &dal.TypeNumber{}},
+				{Identifier: "min", RawExpr: "MIN(price)", Type: &dal.TypeNumber{}},
+				{Identifier: "avg", RawExpr: "AVG(price)", Type: &dal.TypeNumber{}},
+				{Identifier: "stock", RawExpr: "SUM(quantity)", Type: &dal.TypeNumber{}},
+			},
+			// having
+			qlParse(req, "SUM(quantity) > 0"),
+		)
+		req.NoError(err)
+		req.NotNil(i)
+
+		defer req.NoError(i.Close())
+
+		// uncomment to se generated query
+		ctx = logger.ContextWithValue(context.Background(), logger.MakeDebugLogger())
+
+		t.Logf("#%d Iterating over results", p+1)
+		rows := make([]kv, 0, 3)
+		for i.Next(ctx) {
+			row = kv{}
+			req.NoError(i.Scan(row))
+
+			// due to difference of number of decimal digits in different DBs, we need to do this
+			// to make sure we get the same result
+			row["avg"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["avg"]))
+			row["stock"] = fmt.Sprintf("%.2f", cast.ToFloat64(row["stock"]))
+
+			rows = append(rows, row)
+		}
+
+		req.NoError(i.Err())
+		if len(result) == 0 {
+			req.Len(rows, 0)
+		} else {
+			req.Len(rows, 1)
+			req.Equal(result, rows[0].String())
+
+			cur, err = i.ForwardCursor(row)
+			req.NotNil(cur)
+			req.NoError(err)
+		}
+
+	}
+
+}
+
+// Pages through records sorted by a JSON-stored timestamp whose values are not
+// all in the canonical format; every record must come back exactly once
+func TestModel_SearchCursorNonCanonicalTimestamps(t *testing.T) {
+	const (
+		items = 200
+		limit = 7
+	)
+
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				dal.PrimaryAttribute("id", &dal.CodecAlias{Ident: "id"}),
+				{Ident: "due", Type: &dal.TypeTimestamp{Timezone: true}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+
+		// value shapes found in stored records besides the canonical one
+		shapes = []string{
+			"2024-%02d-%02dT10:00:00Z",
+			"2024-%02d-%02d",
+			"2024-%02d-%02dT12:00:00+02:00",
+			"2024-%02d-%02dT10:00:00",
+			"",
+		}
+	)
+
+	req.NoError(err)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	for i := 1; i <= items; i++ {
+		shape := shapes[0]
+		if i%10 == 0 {
+			shape = shapes[(i/10)%len(shapes)]
+		}
+
+		due := shape
+		if shape != "" {
+			due = fmt.Sprintf(shape, i%12+1, i%28+1)
+		}
+
+		req.NoError(m.Create(ctx, &kv{"id": uint64(i), "due": due}))
+	}
+
+	for _, desc := range []bool{false, true} {
+		t.Run(fmt.Sprintf("desc=%v", desc), func(t *testing.T) {
+			var (
+				req  = require.New(t)
+				seen = make(map[uint64]int)
+				cur  *filter.PagingCursor
+			)
+
+			for page := 0; page < items; page++ {
+				i, err := m.Search(filter.Generic(
+					filter.WithCursor(cur),
+					filter.WithLimit(limit),
+					filter.WithOrderBy(filter.SortExprSet{
+						&filter.SortExpr{Column: "due", Descending: desc},
+						&filter.SortExpr{Column: "id", Descending: desc},
+					}),
+				))
+				req.NoError(err)
+
+				var last normalizingKv
+				for i.Next(ctx) {
+					last = normalizingKv{}
+					req.NoError(i.Scan(last))
+					seen[cast.ToUint64(last["id"])]++
+				}
+				req.NoError(i.Err())
+
+				if last == nil {
+					cur, err = nil, i.Close()
+					req.NoError(err)
+					break
+				}
+
+				cur, err = i.ForwardCursor(last)
+				req.NoError(err)
+				req.NoError(i.Close())
+			}
+
+			req.Len(seen, items, "every record is returned")
+			for id, n := range seen {
+				req.Equal(1, n, "record %d returned once", id)
+			}
+		})
+	}
+}
+
+// normalizingKv reformats timestamps on decode, as compose records do
+type normalizingKv kv
+
+func (r normalizingKv) CountValues() map[string]uint { return kv(r).CountValues() }
+
+func (r normalizingKv) GetValue(k string, place uint) (any, error) { return r[k], nil }
+
+func (r normalizingKv) SetValue(k string, place uint, v any) error {
+	if s, ok := v.(string); ok && k == "due" {
+		if t, err := cast.ToTimeE(s); err == nil {
+			v = t.Format(time.RFC3339)
+		}
+	}
+
+	r[k] = v
+	return nil
+}
+
+// Sorts by a JSON-stored timestamp whose values carry a positive UTC offset or
+// only a date; both sort by the time they name, not as missing values
+func TestModel_SearchSortNonCanonicalTimestamps(t *testing.T) {
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				dal.PrimaryAttribute("id", &dal.CodecAlias{Ident: "id"}),
+				{Ident: "due", Type: &dal.TypeTimestamp{Timezone: true}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+	)
+
+	req.NoError(err)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	req.NoError(m.Create(ctx, &kv{"id": uint64(1), "due": "2024-03-01T10:00:00Z"}))
+	req.NoError(m.Create(ctx, &kv{"id": uint64(2), "due": "2024-02-01T12:00:00+02:00"}))
+	req.NoError(m.Create(ctx, &kv{"id": uint64(3), "due": "2024-01-15"}))
+	req.NoError(m.Create(ctx, &kv{"id": uint64(4), "due": "not a date"}))
+
+	i, err := m.Search(filter.Generic(
+		filter.WithOrderBy(filter.SortExprSet{
+			&filter.SortExpr{Column: "due"},
+			&filter.SortExpr{Column: "id"},
+		}),
+	))
+	req.NoError(err)
+	defer i.Close()
+
+	var ids []uint64
+	for i.Next(ctx) {
+		row := kv{}
+		req.NoError(i.Scan(row))
+		ids = append(ids, cast.ToUint64(row["id"]))
+	}
+
+	req.NoError(i.Err())
+	req.Equal([]uint64{4, 3, 2, 1}, ids)
+}
+
+// A query that fails midway reports the failure instead of ending as if the
+// rows had run out
+func TestModel_SearchReportsInterruptedRows(t *testing.T) {
+	if dsn := os.Getenv("DB_DSN"); dsn != "" && !strings.HasPrefix(dsn, "sqlite") {
+		t.Skip("only SQLite reports a cancelled query through rows.Err midway")
+	}
+
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+
+		baseModel = &dal.Model{
+			Ident: t.Name(),
+			Attributes: []*dal.Attribute{
+				dal.PrimaryAttribute("id", &dal.CodecAlias{Ident: "id"}),
+				{Ident: "name", Type: &dal.TypeText{}, Store: &dal.CodecRecordValueSetJSON{Ident: "values"}, Sortable: true},
+			},
+		}
+
+		m = Model(baseModel, s.DB, s.Dialect)
+
+		table, err = s.DataDefiner.ConvertModel(baseModel)
+	)
+
+	req.NoError(err)
+	table.Temporary = true
+	req.NoError(s.DataDefiner.TableCreate(ctx, table))
+	req.NoError(truncate(ctx, table.Ident))
+
+	for i := 1; i <= 50; i++ {
+		req.NoError(m.Create(ctx, &kv{"id": uint64(i), "name": fmt.Sprintf("n%d", i)}))
+	}
+
+	qctx, cancel := context.WithCancel(ctx)
+	i, err := m.Search(filter.Generic(filter.WithOrderBy(filter.SortExprSet{&filter.SortExpr{Column: "id"}})))
+	req.NoError(err)
+	defer i.Close()
+
+	req.True(i.Next(qctx))
+	req.NoError(i.Scan(kv{}))
+
+	cancel()
+	for i.Next(qctx) {
+		req.NoError(i.Scan(kv{}))
+	}
+
+	req.Error(i.Err(), "a cancelled query is an error, not the end of the rows")
+}

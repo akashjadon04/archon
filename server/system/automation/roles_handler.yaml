@@ -1,0 +1,237 @@
+imports:
+  - github.com/cortezaproject/corteza/server/system/types
+  - labelTypes github.com/cortezaproject/corteza/server/pkg/label/types
+
+
+params:
+  lookup: &lookup
+    meta: { label: Lookup }
+    required: true
+    types:
+      - { wf: ID,     }
+      - { wf: Handle, }
+      - { wf: Role,   suffix: res }
+
+  role: &role
+    meta: { label: Role }
+    types:
+      - { wf: Role }
+
+  rvRole: &rvRole
+    wf: Role
+
+  rvUser: &rvUser
+    wf: User
+
+  rvTotal: &rvTotal
+    wf: UnsignedInteger
+
+  rvPageCursor: &rvPageCursor
+    wf: String
+
+  lookupUser: &lookupUser
+    meta: { label: User }
+    required: true
+    types:
+      - { wf: ID     }
+      - { wf: Handle }
+      - { wf: String, suffix: email }
+      - { wf: User,   suffix: res }
+
+  filterParams: &filterParams
+    query:
+      meta: { label: Query }
+      types:
+        - { wf: String }
+    memberID:
+      meta: { label: Member ID }
+      types:
+        - { wf: ID }
+    handle:
+      meta: { label: Handle }
+      types:
+        - { wf: String }
+    name:
+      meta: { label: Name }
+      types:
+        - { wf: String }
+    labels:
+      meta: { label: Labels }
+      types:
+        - { wf: LabelValue }
+    deleted:
+      meta: { label: Deleted }
+      types:
+        - { wf: UnsignedInteger }
+    archived:
+      meta: { label: Archived }
+      types:
+        - { wf: UnsignedInteger }
+    sort:
+      meta: { label: Sort }
+      types:
+        - { wf: String }
+    limit:
+      meta: { label: Limit }
+      types:
+        - { wf: UnsignedInteger }
+    incTotal:
+      meta: { label: Include total }
+      types:
+        - { wf: Boolean }
+    incPageNavigation:
+      meta: { label: Include page navigation }
+      types:
+        - { wf: Boolean }
+    pageCursor:
+      meta: { label: Page cursor }
+      types:
+        - { wf: String }
+
+labels: &labels
+  users:  "step,workflow"
+
+functions:
+  lookup:
+    meta:
+      short: Role lookup
+      description: Find specific role by ID or handle
+    labels:
+      <<: *labels
+    params:
+      lookup: *lookup
+    results:
+      role: *rvRole
+
+  searchMembers:
+    meta:
+      short: Role members search
+      description: Find members for a specific roleby ID or handle
+    labels:
+      <<: *labels
+    params:
+      lookup: *lookup
+    results:
+      users:
+        <<: *rvUser
+        isArray: true
+      total: *rvTotal
+
+  eachMember:
+    kind: iterator
+    meta:
+      short: Iterate over role members
+    labels:
+      <<: *labels
+    params:
+      lookup: *lookup
+    results:
+      user:  *rvUser
+      total: *rvTotal
+
+  addMember:
+    meta:
+      short: Role membership add
+    labels:
+      <<: *labels
+    params:
+      role:
+        <<: *lookup
+        meta: { label: Role }
+      user: *lookupUser
+
+  removeMember:
+    meta:
+      short: Role membership remove
+    labels:
+      <<: *labels
+    params:
+      role:
+        <<: *lookup
+        meta: { label: Role }
+      user: *lookupUser
+
+  search:
+    meta:
+      short: Roles search
+    labels:
+      <<: *labels
+    params: *filterParams
+    results:
+      roles:
+        <<: *rvRole
+        isArray: true
+      total: *rvTotal
+
+  each:
+    kind: iterator
+    meta:
+      short: Roles
+    params: *filterParams
+    results:
+      role:  *rvRole
+      total: *rvTotal
+
+  create:
+    meta:
+      short: Role creator
+    labels:
+      <<: *labels
+      create: "step"
+    params:
+      role:
+        <<: *role
+        meta: { label: Role }
+        required: true
+    results:
+      role: *rvRole
+
+  update:
+    meta:
+      short: Role update
+    labels:
+      <<: *labels
+      update: "step"
+    params:
+      role:
+        <<: *role
+        meta: { label: Role }
+        required: true
+    results:
+      role: *rvRole
+
+  delete:
+    meta:
+      short: Role delete
+    labels:
+      <<: *labels
+      delete: "step"
+    params:
+      lookup: *lookup
+
+  recover:
+    meta:
+      short: Role recover
+    labels:
+      <<: *labels
+      recover: "step"
+    params:
+      lookup: *lookup
+
+  archive:
+    meta:
+      short: Role archive
+    labels:
+      <<: *labels
+      archive: "step"
+    params:
+      lookup: *lookup
+
+  unarchive:
+    meta:
+      short: Role unarchive
+    labels:
+      <<: *labels
+      unarchive: "step"
+    params:
+      lookup: *lookup

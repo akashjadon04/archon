@@ -1,0 +1,173 @@
+imports:
+  - github.com/cortezaproject/corteza/server/system/types
+  - time
+
+params:
+  lookup: &lookup
+    meta: { label: Lookup }
+    required: true
+    types:
+      - { wf: ID,       }
+      - { wf: Reminder, suffix: res }
+  reminder: &reminder
+    types:
+      - { wf: Reminder }
+  rvReminder: &rvReminder
+    wf: Reminder
+  rvTotal: &rvTotal
+    wf: UnsignedInteger
+  filterParams: &filterParams
+    resource:
+      meta: { label: Resource }
+      types:
+        - { wf: String }
+    assignedTo:
+      meta: { label: Assigned to }
+      types:
+        - { wf: ID }
+    excludeDismissed:
+      meta: { label: Exclude dismissed }
+      types:
+        - { wf: Boolean }
+    scheduledOnly:
+      meta: { label: Scheduled only }
+      types:
+        - { wf: Boolean }
+    sort:
+      meta: { label: Sort }
+      types:
+        - { wf: String }
+    limit:
+      meta: { label: Limit }
+      types:
+        - { wf: UnsignedInteger }
+    incTotal:
+      meta: { label: Include total }
+      types:
+        - { wf: Boolean }
+    pageCursor:
+      meta: { label: Page cursor }
+      types:
+        - { wf: String }
+labels: &labels
+  reminders: "step,workflow"
+functions:
+  lookup:
+    meta:
+      short: Reminder lookup
+      description: Find specific reminder by ID
+    labels:
+      <<: *labels
+    params:
+      lookup: *lookup
+    results:
+      reminder: *rvReminder
+  search:
+    meta:
+      short: Reminders search
+      description: Search reminders
+    labels:
+      <<: *labels
+    params: *filterParams
+    results:
+      reminders:
+        <<: *rvReminder
+        isArray: true
+      total: *rvTotal
+  each:
+    kind: iterator
+    meta:
+      short: Iterate reminders
+    params: *filterParams
+    results:
+      reminder: *rvReminder
+      total: *rvTotal
+  create:
+    meta:
+      short: Reminder create
+    labels:
+      <<: *labels
+      create: "step"
+    params:
+      resource:
+        meta: { label: Resource }
+        types:
+          - { wf: String}
+      assignedTo:
+        meta: { label: Assigned to }
+        types:
+          - { wf: ID }
+      assignedBy:
+        meta: { label: Assigned by }
+        types:
+          - { wf: ID }
+      remindAt:
+        meta: { label: Remind at }
+        types:
+          - { wf: DateTime}
+        required: true
+      payload:
+        meta: { label: Payload }
+        types:
+          - { wf: Bytes }
+    results:
+      reminder: *rvReminder
+  update:
+    meta:
+      short: Reminder update
+    labels:
+      <<: *labels
+      update: "step"
+    params:
+      lookup: *lookup
+      resource:
+        meta: { label: Resource }
+        types:
+          - { wf: String}
+      assignedTo:
+        meta: { label: Assigned to }
+        types:
+          - { wf: ID }
+      assignedBy:
+        meta: { label: Assigned by }
+        types:
+          - { wf: ID }
+      remindAt:
+        meta: { label: Remind at }
+        types:
+          - { wf: DateTime}
+      payload:
+        meta: { label: Payload }
+        types:
+          - { wf: Bytes }
+    results:
+      reminder: *rvReminder
+  dismiss:
+    meta:
+      short: Dismiss reminder
+    labels:
+      <<: *labels
+      dismiss: "step"
+    params:
+      lookup: *lookup
+  snooze:
+    meta:
+      short: Snooze reminder
+    labels:
+      <<: *labels
+      snooze: "step"
+    params:
+      lookup: *lookup
+      remindAt:
+        meta: { label: Remind at }
+        types:
+          - { wf: DateTime }
+        required: true
+  delete:
+    meta:
+      short: Reminder delete
+    labels:
+      <<: *labels
+      delete: "step"
+    params:
+      lookup: *lookup

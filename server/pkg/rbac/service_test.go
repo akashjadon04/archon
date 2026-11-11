@@ -1,0 +1,485 @@
+package rbac
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"math/rand"
+	"testing"
+
+	"github.com/cortezaproject/corteza/server/pkg/expr"
+	"github.com/cortezaproject/corteza/server/pkg/id"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
+
+type (
+	matchBenchCfg struct {
+		rules RuleSet
+		roles []*Role
+		res   Resource
+		op    string
+	}
+)
+
+// goos: linux
+// goarch: amd64
+// pkg: github.com/cortezaproject/corteza/server/pkg/rbac
+// cpu: Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
+// Benchmark_AccessCheck_role5_rule500-12            378988              3026 ns/op             615 B/op         16 allocs/op
+// Benchmark_AccessCheck_role5_rule1000-12           253071              4087 ns/op             615 B/op         16 allocs/op
+// Benchmark_AccessCheck_role10_rule10000-12         237085              5429 ns/op            1026 B/op         29 allocs/op
+// Benchmark_AccessCheck_role20_rule50000-12         128914              9344 ns/op            2335 B/op         71 allocs/op
+// Benchmark_AccessCheck_role30_rule100000-12         79963             20670 ns/op            3371 B/op         85 allocs/op
+// Benchmark_AccessCheck_role100_rule500000-12        16927             79106 ns/op           12796 B/op        391 allocs/op
+func benchmark_AccessCheck(b *testing.B, cfg matchBenchCfg) {
+	svc := NewService(zap.NewNop(), nil)
+	svc.UpdateRoles(cfg.roles...)
+	svc.setRules(cfg.rules)
+
+	ctx := context.Background()
+	b.ResetTimer()
+
+	for n := 0; n < b.N; n++ {
+		svc.Can(session{
+			id:  90001,
+			rr:  yankRandRoles(cfg.roles),
+			ctx: ctx,
+		}, cfg.op, cfg.res)
+	}
+}
+
+func Benchmark_AccessCheck_role100_rule1000(b *testing.B) {
+	roles := 100
+	rules := 1000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role100_rule10000(b *testing.B) {
+	roles := 100
+	rules := 10000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role100_rule100000(b *testing.B) {
+	roles := 100
+	rules := 100000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role100_rule1000000(b *testing.B) {
+	roles := 100
+	rules := 1000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role100_rule10000000(b *testing.B) {
+	roles := 100
+	rules := 10000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role1000_rule1000(b *testing.B) {
+	roles := 1000
+	rules := 1000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role1000_rule10000(b *testing.B) {
+	roles := 1000
+	rules := 10000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role1000_rule100000(b *testing.B) {
+	roles := 1000
+	rules := 100000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role1000_rule1000000(b *testing.B) {
+	roles := 1000
+	rules := 1000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role1000_rule10000000(b *testing.B) {
+	roles := 1000
+	rules := 10000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func Benchmark_AccessCheck_role10000_rule1000(b *testing.B) {
+	roles := 10000
+	rules := 1000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+func Benchmark_AccessCheck_role10000_rule10000(b *testing.B) {
+	roles := 10000
+	rules := 10000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+func Benchmark_AccessCheck_role10000_rule100000(b *testing.B) {
+	roles := 10000
+	rules := 100000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+func Benchmark_AccessCheck_role10000_rule1000000(b *testing.B) {
+	roles := 10000
+	rules := 1000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+func Benchmark_AccessCheck_role10000_rule10000000(b *testing.B) {
+	roles := 10000
+	rules := 10000000
+	benchmark_AccessCheck(b, matchBenchCfg{
+		res:   makeResource(),
+		op:    randomOperation(),
+		rules: makeRuleSet(rules, roles),
+		roles: makeRoleSet(roles),
+	})
+}
+
+func yankRandRoles(base []*Role) (out []uint64) {
+	count := rand.Intn(len(base))
+	if count <= 0 {
+		count = int(math.Ceil(float64(len(base)) / 2))
+	}
+
+	out = make([]uint64, count)
+	for i := 0; i < count; i++ {
+		out[i] = base[i].id
+	}
+
+	return
+}
+
+func makeRoleSet(count int) (out []*Role) {
+	for i := 0; i < count; i++ {
+		out = append(out, makeRole(uint64(1000+i), fmt.Sprintf("rl_%d", 1000+i)))
+	}
+
+	return
+}
+
+func makeRole(id uint64, handle string) *Role {
+	rx := rand.Float64()
+
+	if rx <= 1 {
+		return CommonRole.Make(id, handle)
+	}
+
+	return makeContextualRole(id, handle)
+}
+
+func makeContextualRole(id uint64, handle string) *Role {
+	rx := rand.Float64()
+
+	if rx < 0.7 {
+		return makeContextualRolePassing(id, handle)
+	}
+	return makeContextualRoleFailing(id, handle)
+}
+
+func makeContextualRolePassing(id uint64, handle string) *Role {
+	p := expr.NewParser()
+	eval, err := p.Parse("true == true && true == true && 1 <= 1")
+	if err != nil {
+		panic(err)
+	}
+
+	check := func(scope map[string]interface{}) bool {
+		vars, err := expr.NewVars(scope)
+		if err != nil {
+			return false
+		}
+
+		ctx := context.Background()
+		test, err := eval.Test(ctx, vars)
+		if err != nil {
+			return false
+		}
+
+		return test
+	}
+
+	return MakeContextRole(id, handle, check, "corteza::compose:record")
+}
+
+func makeContextualRoleFailing(id uint64, handle string) *Role {
+	p := expr.NewParser()
+	eval, err := p.Parse("false == false || false == false || 1 > 1")
+	if err != nil {
+		panic(err)
+	}
+
+	check := func(scope map[string]interface{}) bool {
+		vars, err := expr.NewVars(scope)
+		if err != nil {
+			return false
+		}
+
+		ctx := context.Background()
+		test, err := eval.Test(ctx, vars)
+		if err != nil {
+			return false
+		}
+
+		return test
+	}
+
+	return MakeContextRole(id, handle, check, "corteza::compose:record")
+}
+
+func makeResource() (out Resource) {
+	return resource(randomResource())
+}
+
+func makeRuleSet(count int, roleCount int) (out RuleSet) {
+	for i := 0; i < count; i++ {
+		out = append(out, &Rule{
+			RoleID:    uint64(1000 + int(rand.Intn(roleCount))),
+			Resource:  randomResource(),
+			Operation: randomOperation(),
+			Access:    randomAccess(),
+		})
+	}
+
+	return
+}
+
+func randomAccess() (out Access) {
+	x := rand.Float64()
+	if x < 0.7 {
+		return Inherit
+	}
+	return Inherit
+}
+
+func randomOperation() (out string) {
+	ops := []string{"read", "write", "delete"}
+	return ops[rand.Intn(len(ops))]
+}
+
+func randomResource() (out string) {
+	return fmt.Sprintf("%s:%s/%s/%s", RandStringRunes(1), RandStringRunes(1), RandStringRunes(1), RandStringRunes(1))
+}
+
+// var letterRunes = []rune("abcdefghijklmnoprst")
+var letterRunes = []rune("abcdefghijklmnoprstuvzxyABCDEFGHIJKLMNOPRSTXY")
+
+func RandStringRunes(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
+}
+
+func TestApplicableRoles(t *testing.T) {
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+		svc = NewService(zap.NewNop(), nil)
+	)
+
+	svc.UpdateRoles(
+		CommonRole.Make(1, "own"),
+		CommonRole.Make(2, "other"),
+		MakeContextRole(3, "owner", func(map[string]interface{}) bool { return true }, "corteza::compose:record"),
+		CommonRole.Make(4, "group"),
+	)
+
+	// no org tree loaded yet: no group roles
+	req.Equal(map[uint64]bool{1: true, 3: true}, svc.ApplicableRoles(ParamsToSession(ctx, 50, 1)))
+
+	req.NoError(svc.UpdateUserGroups())
+	req.NoError(svc.AddNode(id.MustNumID(101), "root"))
+	req.NoError(svc.AddGroupRole(id.MustNumID(101), id.MustNumID(4)))
+	req.NoError(svc.AssignGroupMembers(id.MustNumID(101), id.MustNumID(50)))
+
+	// own roles, the user group's roles and every contextual role
+	req.Equal(map[uint64]bool{1: true, 3: true, 4: true}, svc.ApplicableRoles(ParamsToSession(ctx, 50, 1)))
+
+	// not a member of any group
+	req.Equal(map[uint64]bool{2: true, 3: true}, svc.ApplicableRoles(ParamsToSession(ctx, 60, 2)))
+}
+
+func TestCheckWithoutContextRoles(t *testing.T) {
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+		svc = NewService(zap.NewNop(), nil)
+		res = NewResource("thing/1")
+		ses = ParamsToSession(ctx, 5, 1)
+	)
+
+	svc.UpdateRoles(
+		CommonRole.Make(1, "common"),
+		MakeContextRole(2, "ctx", func(map[string]interface{}) bool { return true }, "thing"),
+	)
+
+	req.NoError(svc.Grant(ctx, AllowRule(2, "thing/*", "read")))
+	req.Equal(Allow, svc.Check(ses, "read", res), "the contextual role allows")
+	req.Equal(Inherit, svc.CheckWithoutContextRoles(ses, "read", res), "without it nothing does")
+
+	req.NoError(svc.Grant(ctx, AllowRule(1, "thing/*", "read")))
+	req.Equal(Allow, svc.CheckWithoutContextRoles(ses, "read", res), "the common role allows")
+}
+
+// User groups decide only what the user's own roles leave open; a user in no
+// group gets Deny then, as before groups were looked up only when needed
+func TestCheckUserGroupsFillIn(t *testing.T) {
+	const (
+		ownRole   = 1
+		groupRole = 4
+		member    = 50
+		loner     = 60
+	)
+
+	var (
+		ctx = context.Background()
+		res = NewResource("thing/1")
+
+		svc = func(rr ...*Rule) *service {
+			svc := NewService(zap.NewNop(), nil)
+			svc.UpdateRoles(CommonRole.Make(ownRole, "own"), CommonRole.Make(groupRole, "group"))
+			require.NoError(t, svc.UpdateUserGroups())
+			require.NoError(t, svc.AddNode(id.MustNumID(101), "root"))
+			require.NoError(t, svc.AddGroupRole(id.MustNumID(101), id.MustNumID(groupRole)))
+			require.NoError(t, svc.AssignGroupMembers(id.MustNumID(101), id.MustNumID(member)))
+			require.NoError(t, svc.Grant(ctx, rr...))
+			return svc
+		}
+
+		groupAllows = AllowRule(groupRole, "thing/*", "read")
+	)
+
+	for _, c := range []struct {
+		name  string
+		rules []*Rule
+		user  uint64
+		want  Access
+	}{
+		{"own allow, group allow", []*Rule{AllowRule(ownRole, "thing/*", "read"), groupAllows}, member, Allow},
+		{"own deny, group allow", []*Rule{DenyRule(ownRole, "thing/*", "read"), groupAllows}, member, Deny},
+		{"own nothing, group allow", []*Rule{groupAllows}, member, Allow},
+		{"own nothing, group nothing", nil, member, Inherit},
+		{"own allow, no group", []*Rule{AllowRule(ownRole, "thing/*", "read")}, loner, Allow},
+		{"own nothing, no group", []*Rule{groupAllows}, loner, Deny},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := svc(c.rules...)
+			ses := ParamsToSession(ctx, c.user, ownRole)
+			require.Equal(t, c.want, s.Check(ses, "read", res))
+			require.Equal(t, c.want, s.CheckWithoutContextRoles(ses, "read", res))
+		})
+	}
+}
+
+// Contextual roles of one permission check share one conversion of the scope,
+// which carries the scope's values and not the memo itself
+func TestScopeVarsSharedPerCheck(t *testing.T) {
+	var (
+		req = require.New(t)
+		ctx = context.Background()
+		svc = NewService(zap.NewNop(), nil)
+		res = NewResource("thing/1")
+
+		got = make([]*expr.Vars, 0, 2)
+		fn  = func(scope map[string]interface{}) bool {
+			vars, err := ScopeVars(scope)
+			req.NoError(err)
+			got = append(got, vars)
+			return false
+		}
+	)
+
+	svc.UpdateRoles(
+		CommonRole.Make(1, "common"),
+		MakeContextRole(2, "first", fn, "thing"),
+		MakeContextRole(3, "second", fn, "thing"),
+	)
+
+	svc.Check(ParamsToSession(ctx, 5, 1), "read", res)
+
+	req.Len(got, 2)
+	req.Same(got[0], got[1], "one conversion for both roles")
+	req.True(got[0].Has("userID"))
+	req.False(got[0].Has(scopeVarsKey))
+
+	got = got[:0]
+	svc.Check(ParamsToSession(ctx, 5, 1), "read", res)
+	req.Len(got, 2)
+	req.Same(got[0], got[1])
+}

@@ -1,0 +1,130 @@
+name: httpRequest
+
+imports:
+  - time
+  - net/http
+  - net/url
+  - io
+
+params:
+  url: &url
+    required: true
+    types:
+      - { wf: String }
+    meta: { label: URL, visual: { input: { type: url } } }
+
+  method: &method
+    required: true
+    types:
+      - { wf: String }
+    meta:
+      label: Method
+      visual:
+        input:
+          type: select
+          properties:
+            options:
+              - { value: "GET",      text: "GET" }
+              - { value: "HEAD",     text: "HEAD" }
+              - { value: "POST",     text: "POST" }
+              - { value: "PUT",      text: "PUT" }
+              - { value: "PATCH",    text: "PATCH" }
+              - { value: "DELETE",   text: "DELETE" }
+              - { value: "CONNECT",  text: "CONNECT" }
+              - { value: "OPTIONS",  text: "OPTIONS" }
+              - { value: "TRACE",    text: "TRACE" }
+
+  params: &params
+    meta: { label: Parameters }
+    types:
+      - { wf: KVV,      go: 'url.Values' }
+
+  headers: &headers
+    types:
+      - { wf: KVV,      go: 'http.Header' }
+    meta: { label: Headers, visual: { input: { type: http-headers } } }
+
+
+  headerAuthBearer: &headerAuthBearer
+    meta: { label: Bearer token }
+    types:
+      - { wf: String }
+
+  headerAuthUsername: &headerAuthUsername
+    meta: { label: Basic auth username }
+    types:
+      - { wf: String }
+  headerAuthPassword: &headerAuthPassword
+    meta: { label: Basic auth password }
+    types:
+      - { wf: String }
+  headerContentType: &headerContentType
+    meta: { label: Content type }
+    types:
+      - { wf: String }
+  headerUserAgent: &headerUserAgent
+    meta: { label: User agent }
+    types:
+      - { wf: String }
+  timeout: &timeout
+    meta: { label: Timeout }
+    types:
+      - { wf: Duration }
+  form: &form
+    meta: { label: Form }
+    types:
+      - { wf: KVV,      go: 'url.Values' }
+  body: &body
+    meta: { label: Body }
+    types:
+      - { wf: String,   suffix: String }
+      - { wf: Reader,   suffix: Stream }
+      - { wf: Any,      suffix: Raw }
+
+results:
+  status: &rStatus
+    wf: String
+
+  stautsCode: &rStatusCode
+    wf: Integer
+
+  headers: &rHeaders
+    wf: KVV
+
+  contentLength: &rContentLength
+    wf: Integer
+
+  contentType: &rContentType
+    wf: String
+
+  body: &rBody
+    wf: Reader
+
+
+functions:
+  send:
+    meta:
+      short: HTTP request
+      description: Sends HTTP requests
+    labels:
+      "http request": "step,workflow"
+    params:
+      url:                *url
+      method:             *method
+      params:             *params
+      headers:            *headers
+      headerAuthBearer:   *headerAuthBearer
+      headerAuthUsername: *headerAuthUsername
+      headerAuthPassword: *headerAuthPassword
+      headerUserAgent:    *headerUserAgent
+      headerContentType:  *headerContentType
+      timeout:            *timeout
+      form:               *form
+      body:               *body
+    results:
+      status:             *rStatus
+      statusCode:         *rStatusCode
+      headers:            *rHeaders
+      contentLength:      *rContentLength
+      contentType:        *rContentType
+      body:               *rBody

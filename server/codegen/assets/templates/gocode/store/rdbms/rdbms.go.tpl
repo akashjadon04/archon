@@ -1,0 +1,799 @@
+package rdbms
+
+{{ template "gocode/header-gentext.tpl" }}
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/doug-martin/goqu/v9"
+	"github.com/doug-martin/goqu/v9/exp"
+	"github.com/modern-go/reflect2"
+	"github.com/cortezaproject/corteza/server/pkg/errors"
+	"github.com/cortezaproject/corteza/server/pkg/filter"
+	"github.com/cortezaproject/corteza/server/store"
+	"github.com/cortezaproject/corteza/server/store"
+{{- range $path, $alias :=  .imports }}
+    {{ $alias }} {{ printf "%q" $path }}
+{{- end }}
+)
+
+{{ define "extraArgs" -}}
+{{/*This is temporary solution until we properly implement Compose Record Store*/}}
+{{- if eq . "composeRecord" }}mod *composeType.Module, {{ end -}}
+{{- end }}
+{{ define "extraParams" -}}
+{{/*This is temporary solution until we properly implement Compose Record Store*/}}
+{{- if eq . "composeRecord" }}mod, {{ end -}}
+{{- end }}
+
+var (
+{{ range .types }}
+	_ store.{{ .expIdentPlural }} = &Store{}
+{{- end }}
+)
+
+{{- range .types }}
+// Create{{ .expIdent }} creates one or more rows in {{ .ident }} collection
+//
+// This function is auto-generated
+func (s *Store) Create{{ .expIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} rr ...*{{ .goType }}) (err error) {
+	for i := range rr {
+		if err = s.check{{ .expIdent }}Constraints(ctx, rr[i]); err != nil {
+			return
+		}
+
+		if err = s.Exec(ctx, {{ .ident }}InsertQuery(s.Dialect.GOQU(), rr[i])); err != nil {
+			return
+		}
+	}
+
+
+	return
+}
+
+// Update{{ .expIdent }} updates one or more existing entries in {{ .ident }} collection
+//
+// This function is auto-generated
+func (s *Store) Update{{ .expIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} rr ...*{{ .goType }}) (err error) {
+	for i := range rr {
+		if err = s.check{{ .expIdent }}Constraints(ctx, rr[i]); err != nil {
+			return
+		}
+
+		if err = s.Exec(ctx, {{ .ident }}UpdateQuery(s.Dialect.GOQU(), rr[i])); err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+// Upsert{{ .expIdent }} updates one or more existing entries in {{ .ident }} collection
+//
+// This function is auto-generated
+func (s *Store) Upsert{{ .expIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} rr ...*{{ .goType }}) (err error) {
+	for i := range rr {
+		if err = s.check{{ .expIdent }}Constraints(ctx, rr[i]); err != nil {
+			return
+		}
+
+		// @todo this solution is ok for now but could be problematic when we start
+		// batching together DB operations.
+		if s.Dialect.Nuances().TwoStepUpsert {
+			var rsp sql.Result
+			rsp, err = s.ExecR(ctx, {{ .ident }}UpdateQuery(s.Dialect.GOQU(), rr[i]))
+			if err != nil {
+				return
+			}
+			if c, err := rsp.RowsAffected(); err != nil {
+				return err
+			} else if c > 0 {
+				continue
+			}
+
+			err = s.Exec(ctx, {{ .ident }}InsertQuery(s.Dialect.GOQU(), rr[i]))
+			if err != nil {
+				return
+			}
+		} else {
+			err = s.Exec(ctx, {{ .ident }}UpsertQuery(s.Dialect.GOQU(), rr[i]))
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	return
+}
+
+// Delete{{ .expIdent }} Deletes one or more entries from {{ .ident }} collection
+//
+// This function is auto-generated
+func (s *Store) Delete{{ .expIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} rr ...*{{ .goType }}) (err error) {
+	for i := range rr {
+		if err = s.Exec(ctx, {{ .ident }}DeleteQuery(s.Dialect.GOQU(), {{ .ident }}PrimaryKeys(rr[i]))); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
+{{ if .api.deleteByPK.expFnIdent }}
+// {{ .api.deleteByPK.expFnIdent }} deletes single entry from {{ .ident }} collection
+//
+// This function is auto-generated
+func (s *Store) {{ .api.deleteByPK.expFnIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} {{ range .api.deleteByPK.attributes }}{{ .ident }} {{ .goType }},{{ end }}) error {
+	return s.Exec(ctx, {{ .ident }}DeleteQuery(s.Dialect.GOQU(), goqu.Ex{
+	{{- range .api.deleteByPK.attributes }}
+		{{ printf "%q" .storeIdent }}: {{ .ident }},
+	{{- end }}
+	}))
+}
+{{ end }}
+
+// Truncate{{ .expIdentPlural }} Deletes all rows from the {{ .ident }} collection
+func (s *Store) Truncate{{ .expIdentPlural }}(ctx context.Context, {{ template "extraArgs" .ident }}) error {
+	return s.Exec(ctx, {{ .ident }}TruncateQuery(s.Dialect.GOQU()))
+}
+
+// Search{{ .expIdentPlural }} returns (filtered) set of {{ .expIdentPlural }}
+//
+// This function is auto-generated
+func (s *Store) Search{{ .expIdentPlural }}(ctx context.Context, {{ template "extraArgs" .ident }} f {{ .goFilterType }}) (set {{ .goSetType }}, _ {{ .goFilterType }}, err error) {
+	{{ if .features.paging }}
+	// Cleanup unwanted cursor values (only relevant is f.PageCursor, next&prev are reset and returned)
+	f.PrevPage, f.NextPage = nil, nil
+
+	if f.PageCursor != nil {
+		if f.IncPageNavigation || f.IncTotal {
+			return nil, f, fmt.Errorf("not allowed to fetch page navigation or total item count with page cursor")
+		}
+
+		// Page cursor exists; we need to validate it against used sort
+		// To cover the case when paging cursor is set but sorting is empty, we collect the sorting instructions
+		// from the cursor.
+		// This (extracted sorting info) is then returned as part of response
+		if f.Sort, err = f.PageCursor.Sort(f.Sort); err != nil {
+			return
+		}
+	}
+
+	{{- $sortColumn := "id" }}
+
+	{{ if (eq .expIdentPlural "FederationModuleMappings") }}
+        {{ $sortColumn = "node_id" }}
+    {{ end }}
+
+    {{ if (eq .expIdentPlural "FederationNodeSyncs") }}
+        {{ $sortColumn = "rel_node" }}
+    {{ end }}
+
+    // Make sure results are always sorted at least by primary keys
+	if f.Sort.Get("{{ $sortColumn }}") == nil {
+		f.Sort = append(f.Sort, &filter.SortExpr{
+			Column:     "{{ $sortColumn }}",
+			Descending: f.Sort.LastDescending(),
+		})
+	}
+
+	// Cloned sorting instructions for the actual sorting
+	// Original are passed to the etchFullPageOf{{ .expIdentPlural }} fn used for cursor creation;
+	// direction information it MUST keep the initial
+	sort := f.Sort.Clone()
+
+	// When cursor for a previous page is used it's marked as reversed
+	// This tells us to flip the descending flag on all used sort keys
+	if f.PageCursor != nil && f.PageCursor.ROrder {
+		sort.Reverse()
+	}
+
+	set, f.PrevPage, f.NextPage, err = s.fetchFullPageOf{{ .expIdentPlural }}(ctx, f, sort)
+
+	f.PageCursor = nil
+	if err != nil {
+		return nil, f, err
+	}
+
+	if f.IncTotal {
+		// Calc total from the number of items fetched
+		// even if we do build the page navigation
+		f.Total = uint(len(set))
+
+		if f.Limit > 0 && uint(len(set)) == f.Limit {
+			// page is full, so there may be more; count the rest
+			if f.Total, err = s.countOf{{ .expIdentPlural }}(ctx, f); err != nil {
+				return nil, f, err
+			}
+		}
+	}
+
+	{{ else }}
+	set, _, _, err = s.Query{{ .expIdentPlural }}(ctx, f)
+	if err != nil {
+		return nil, f, err
+	}
+
+	{{ end }}
+	return set, f, nil
+}
+
+{{ if .features.paging }}
+// fetchFullPageOf{{ .expIdentPlural }} collects all requested results.
+//
+// Function applies:
+//  - cursor conditions (where ...)
+//  - limit
+//
+// Main responsibility of this function is to perform additional sequential queries in case when not enough results
+// are collected due to failed check on a specific row (by check fn).
+//
+// Function then moves cursor to the last item fetched
+//
+// This function is auto-generated
+func (s *Store) fetchFullPageOf{{ .expIdentPlural }}(
+	ctx context.Context,
+	filter {{ .goFilterType }},
+	sort filter.SortExprSet,
+) (set []*{{ .goType }}, prev, next *filter.PagingCursor, err error) {
+	var (
+		aux []*{{ .goType }}
+
+		// When cursor for a previous page is used it's marked as reversed
+		// This tells us to flip the descending flag on all used sort keys
+		reversedOrder = filter.PageCursor != nil && filter.PageCursor.ROrder
+
+		// Copy no. of required items to limit
+		// Limit will change when doing subsequent queries to fill
+		// the set with all required items
+		limit = filter.Limit
+
+		reqItems = filter.Limit
+
+		// cursor to prev. page is only calculated when cursor is used
+		hasPrev = filter.PageCursor != nil
+
+		// next cursor is calculated when there are more pages to come
+		hasNext bool
+
+		tryFilter {{ .goFilterType }}
+
+		// last row the query reached, whether or not the check fn kept it;
+		// survives the per-try filter reset so retries continue where the previous one stopped
+		lastScanned *{{ .goType }}
+
+		// cursor the next try starts from
+		cursor = filter.PageCursor
+	)
+
+	set = make([]*{{ .goType }}, 0, DefaultSliceCapacity)
+
+	for try := 0; try < MaxRefetches; try++ {
+		// Copy filter & apply custom sorting that might be affected by cursor
+		tryFilter = filter
+		tryFilter.Sort = sort
+		tryFilter.PageCursor = cursor
+
+		if limit > 0 {
+			// fetching + 1 to peak ahead if there are more items
+			// we can fetch (next-page cursor)
+			tryFilter.Limit = limit + 1
+		}
+
+		if aux, hasNext, lastScanned, err = s.Query{{ .expIdentPlural }}(ctx, tryFilter); err != nil {
+			return nil, nil, nil, err
+		}
+
+		if lastScanned == nil {
+			// source exhausted
+			break
+		}
+
+		// advance past everything this try reached, kept or not;
+		// built from the effective sort, which is flipped when paging backwards
+		cursor = s.{{ .api.collectCursorValues.fnIdent }}(lastScanned, sort...)
+		cursor.LThen = sort.Reversed()
+
+		// append fetched items
+		set = append(set, aux...)
+
+		if reqItems == 0 || !hasNext {
+			// no max requested items specified, break out
+			break
+		}
+
+		collected := uint(len(set))
+
+		if reqItems > collected {
+			if len(aux) == 0 {
+				// the check fn rejected the whole batch; widen the window so a long
+				// run of rejected rows is crossed in a few queries, not MaxRefetches
+				if limit < MaxEnsureFetchLimit {
+					limit *= 2
+				}
+			} else {
+				// not enough items fetched, try again with adjusted limit
+				limit = reqItems - collected
+
+				if limit < MinEnsureFetchLimit {
+					// In case limit is set very low and we've missed records in the first fetch,
+					// make sure next fetch limit is a bit higher
+					limit = MinEnsureFetchLimit
+				}
+			}
+
+			continue
+		}
+
+		break
+	}
+
+	// never hand back more than was asked for; anything trimmed means there is another page
+	if reqItems > 0 && uint(len(set)) > reqItems {
+		set = set[:reqItems]
+		hasNext = true
+	}
+
+	collected := len(set)
+
+	if collected == 0 {
+		return nil, nil, nil, nil
+	}
+
+	if reversedOrder {
+		// Fetched set needs to be reversed because we've forced a descending order to get the previous page
+		for i, j := 0, collected-1; i < j; i, j = i+1, j-1 {
+			set[i], set[j] = set[j], set[i]
+		}
+
+		// when in reverse-order rules on what cursor to return change
+		hasPrev, hasNext = hasNext, hasPrev
+	}
+
+	if hasPrev {
+		prev = s.{{ .api.collectCursorValues.fnIdent }}(set[0], filter.Sort...)
+		prev.ROrder = true
+		prev.LThen = !filter.Sort.Reversed()
+	}
+
+	if hasNext {
+		next = s.{{ .api.collectCursorValues.fnIdent }}(set[collected-1], filter.Sort...)
+		next.LThen = filter.Sort.Reversed()
+	}
+
+	return set, prev, next, nil
+}
+
+// countOf{{ .expIdentPlural }} counts all rows matching the filter
+//
+// Rows are counted, not collected, so the cost does not grow with the size of
+// the result set. When a check fn is set it has to see every row, so rows are
+// scanned and decoded one at a time; without one the database does the counting.
+//
+// This function is auto-generated
+func (s *Store) countOf{{ .expIdentPlural }}(ctx context.Context, f {{ .goFilterType }}) (total uint, err error) {
+	var (
+		expr []goqu.Expression
+	)
+
+	if s.Filters.{{ .expIdent }} != nil {
+		// extended filter set
+		expr, f, err = s.Filters.{{ .expIdent }}(s, f)
+	} else {
+		// using generated filter
+		expr, f, err = {{ .expIdent }}Filter(s.Dialect, f)
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("could not generate filter expression for {{ .expIdent }}: %w", err)
+	}
+
+	{{ if .features.checkFn }}
+	if f.Check != nil {
+		var (
+			rows *sql.Rows
+			aux  *{{ .auxIdent }}
+			res  *{{ .goType }}
+			ok   bool
+		)
+
+		if rows, err = s.Query(ctx, {{ .ident }}SelectQuery(s.Dialect.GOQU()).Where(expr...)); err != nil {
+			return 0, fmt.Errorf("could not query {{ .expIdent }}: %w", err)
+		}
+
+		defer func() {
+			closeError := rows.Close()
+			if err == nil {
+				// return error from close
+				err = closeError
+			}
+		}()
+
+		for rows.Next() {
+			if err = rows.Err(); err != nil {
+				return 0, fmt.Errorf("could not query {{ .expIdent }}: %w", err)
+			}
+
+			aux = new({{ .auxIdent }})
+			if err = aux.scan(rows); err != nil {
+				return 0, fmt.Errorf("could not scan rows for {{ .expIdent }}: %w", err)
+			}
+
+			if res, err = aux.decode(); err != nil {
+				return 0, fmt.Errorf("could not decode {{ .expIdent }}: %w", err)
+			}
+
+			if ok, err = f.Check(res); err != nil {
+				return 0, err
+			} else if ok {
+				total++
+			}
+		}
+
+		return total, rows.Err()
+	}
+	{{ end }}
+
+	var (
+		counted int64
+		countRows *sql.Rows
+	)
+
+	if countRows, err = s.Query(ctx, {{ .ident }}SelectQuery(s.Dialect.GOQU()).Where(expr...).Select(goqu.COUNT(goqu.Star()))); err != nil {
+		return 0, fmt.Errorf("could not count {{ .expIdent }}: %w", err)
+	}
+
+	defer func() {
+		closeError := countRows.Close()
+		if err == nil {
+			// return error from close
+			err = closeError
+		}
+	}()
+
+	if countRows.Next() {
+		if err = countRows.Scan(&counted); err != nil {
+			return 0, fmt.Errorf("could not scan count for {{ .expIdent }}: %w", err)
+		}
+	}
+
+	return uint(counted), countRows.Err()
+}
+{{ end }}
+
+// Query{{ .expIdentPlural }} queries the database, converts and checks each row and returns collected set
+//
+// With generics, we can remove this per-resource-generated function
+// and replace it with a single utility fetcher
+//
+// This function is auto-generated
+func (s *Store) Query{{ .expIdentPlural }}(
+	ctx context.Context,
+	f {{ .goFilterType }},
+) (_ []*{{ .goType }}, more bool, last *{{ .goType }}, err error) {
+	var (
+	{{ if .features.checkFn }}
+		ok          bool
+	{{ end }}
+		set         = make([]*{{ .goType }}, 0, DefaultSliceCapacity)
+		res         *{{ .goType }}
+		aux         *{{ .auxIdent }}
+		rows        *sql.Rows
+		count       uint
+		expr, tExpr []goqu.Expression
+	{{ if .features.sorting }}
+		sortExpr []exp.OrderedExpression
+	{{ end }}
+	)
+
+	if s.Filters.{{ .expIdent }} != nil {
+		// extended filter set
+		tExpr, f, err = s.Filters.{{ .expIdent }}(s, f)
+	} else {
+		// using generated filter
+		tExpr, f, err = {{ .expIdent }}Filter(s.Dialect, f)
+	}
+
+	if err != nil {
+		err = fmt.Errorf("could not generate filter expression for {{ .expIdent }}: %w", err)
+		return
+	}
+
+	expr = append(expr, tExpr...)
+
+	{{ if .features.paging }}
+	// paging feature is enabled
+	if f.PageCursor != nil {
+        {{- if .features.sorting }}
+        if tExpr, err = cursorWithSorting(s.Dialect, f.PageCursor, s.{{ .api.sortableFields.fnIdent }}()); err != nil {
+        {{- else }}
+        if tExpr, err = cursor(f.PageCursor); err != nil {
+        {{- end }}
+            return
+        } else {
+            expr = append(expr, tExpr...)
+        }
+	}
+	{{ end }}
+
+
+	query := {{ .ident }}SelectQuery(s.Dialect.GOQU()).Where(expr...)
+
+	{{ if .features.sorting }}
+	// sorting feature is enabled
+	if sortExpr, err = order(f.Sort, s.{{ .api.sortableFields.fnIdent }}()); err != nil {
+		err = fmt.Errorf("could not generate order expression for {{ .expIdent }}: %w", err)
+		return
+	}
+
+	if len(sortExpr) > 0 {
+		query = query.Order(sortExpr...)
+	}
+	{{ end }}
+
+	if f.Limit > 0 {
+		query = query.Limit(f.Limit)
+	}
+
+
+	rows, err = s.Query(ctx, query)
+	if err != nil {
+		err = fmt.Errorf("could not query {{ .expIdent }}: %w", err)
+		return
+	}
+
+	if err = rows.Err(); err != nil {
+		err = fmt.Errorf("could not query {{ .expIdent }}: %w", err)
+		return
+	}
+
+	defer func() {
+		closeError := rows.Close()
+		if err == nil {
+			// return error from close
+			err = closeError
+		}
+	}()
+
+	for rows.Next() {
+		if err = rows.Err(); err != nil {
+			err = fmt.Errorf("could not query {{ .expIdent }}: %w", err)
+			return
+		}
+
+		aux = new({{ .auxIdent }})
+		if err = aux.scan(rows); err != nil {
+			err = fmt.Errorf("could not scan rows for {{ .expIdent }}: %w", err)
+			return
+		}
+
+		count++
+		if res, err = aux.decode(); err != nil {
+			err = fmt.Errorf("could not decode {{ .expIdent }}: %w", err)
+			return
+		}
+
+		// last scanned row, before the check fn gets a say;
+		// paging uses it to advance past rows the check rejects
+		last = res
+
+		{{ if .features.checkFn }}
+		// check fn set, call it and see if it passed the test
+		// if not, skip the item
+		if f.Check != nil {
+			if ok, err = f.Check(res); err != nil {
+				return
+			} else if !ok {
+				continue
+			}
+		}
+		{{ end }}
+
+		set = append(set, res)
+	}
+
+	{{ if .features.paging }}
+	return set, f.Limit > 0 && count >= f.Limit, last, err
+	{{ else }}
+	return set, false, last, err
+	{{ end }}
+}
+
+{{- range .api.lookups }}
+	{{ if .description	}}{{ .description }}{{ end }}
+	//
+	// This function is auto-generated
+	func (s *Store) {{ .expFnIdent }}(ctx context.Context, {{ template "extraArgs" .ident }} {{ range .args }}{{ .ident }} {{ .goType }}, {{ end }}) (_ *{{ .returnType }}, err error) {
+		var (
+			rows *sql.Rows
+			aux = new({{ .auxIdent }})
+			lookup = {{ .ident }}SelectQuery(s.Dialect.GOQU()).Where(
+				{{- range .args }}
+					{{- if .ignoreCase }}
+					s.Functions.LOWER(goqu.I({{ printf "%q" .storeIdent }})).Eq(strings.ToLower({{ .ident }})),
+					{{- else }}
+					goqu.I({{ printf "%q" .storeIdent }}).Eq({{ .ident }}),
+					{{- end }}
+				{{- end }}
+				{{- range .nullConstraint }}
+					stateNilComparison(s.Dialect, {{ printf "%q" . }}, filter.StateExcluded),
+				{{- end }}
+			).Limit(1)
+		)
+
+		rows, err = s.Query(ctx, lookup)
+		if err != nil {
+			return
+		}
+
+		defer func() {
+			closeError := rows.Close()
+			if err == nil {
+				// return error from close
+				err = closeError
+			}
+		}()
+
+		if err = rows.Err(); err != nil {
+			return
+		}
+
+		if !rows.Next() {
+			return nil, store.ErrNotFound.Stack(1)
+		}
+
+		if err = aux.scan(rows); err != nil {
+			return
+		}
+
+		return aux.decode()
+	}
+{{- end }}
+
+{{ with .api.sortableFields }}
+// {{ .fnIdent }} returns all {{ .expIdent }} columns flagged as sortable
+//
+// # Notes
+// With optional string arg, all columns are returned aliased
+//
+// This function is auto-generated
+func (Store) {{ .fnIdent }}() map[string]string {
+	return map[string]string{
+		{{- range $k, $v := .fields }}
+			{{ printf "%q: %q" $k $v }},
+		{{- end }}
+	}
+}
+{{ end }}
+
+{{ with .api.collectCursorValues }}
+// {{ .fnIdent }} collects values from the given resource that and sets them to the cursor
+// to be used for pagination
+//
+// Values that are collected must come from sortable, unique or primary columns/fields
+// At least one of the collected columns must be flagged as unique, otherwise fn appends primary keys at the end
+//
+// # Known issues:
+//
+// When collecting cursor values for query that sorts by unique column with partial index (ie: unique handle on
+// undeleted items)
+//
+// This function is auto-generated
+func (s *Store) {{ .fnIdent }}(res *{{ .goType }}, cc ...*filter.SortExpr) *filter.PagingCursor {
+	{{- if .fields }}
+	var (
+		cur = &filter.PagingCursor{LThen: filter.SortExprSet(cc).Reversed()}
+
+		hasUnique bool
+
+		{{ range .primaryKeys }}
+		pk{{ .expIdent }} bool
+		{{- end }}
+
+		collect = func(cc ...*filter.SortExpr) {
+			getVal := func(col string) interface{} {
+				// a sort names the field or its column, in any case
+				switch strings.ToLower(col) {
+				{{- range .fields }}
+				case {{ printf "%q" (lower .ident) }}{{ if ne (lower .ident) (lower .name) }}, {{ printf "%q" (lower .name) }}{{ end }}:
+					{{- if .primaryKey }}
+	                                        pk{{ .expIdent }} = true
+	                                {{- else if .unique }}
+	                                        hasUnique = true
+	                                {{- end }}
+					return res.{{ .expIdent }}
+				{{- end }}
+				}
+				return nil
+			}
+
+
+			for _, c := range cc {
+				switch c.Modifier() {
+				case filter.COALESCE:
+					var val interface{}
+					for _, col := range c.Columns() {
+						if reflect2.IsNil(val) {
+							val = getVal(col)
+						}
+					}
+					cur.SetModifier(c.Column, val, c.Descending, c.Modifier(), c.Columns()...)
+				default:
+					cur.Set(c.Column, getVal(c.Column), c.Descending)
+				}
+			}
+		}
+	)
+
+
+	_ = hasUnique
+
+	collect(cc...)
+	{{- range .primaryKeys }}
+	if !hasUnique || !pk{{ .expIdent }} {
+			collect(&filter.SortExpr{Column: {{ printf "%q" .ident }}, Descending: {{ if .descending }}true{{ else }}false{{ end }}})
+	}
+	{{- end }}
+
+	return cur
+	{{ else }}
+	return nil
+	{{- end }}
+}
+{{ end }}
+
+
+{{ with .api.checkConstraints }}
+// {{ .fnIdent }} performs lookups (on valid) resource to check if any of the values on unique fields
+// already exists in the store
+//
+// Using built-in constraint checking would be more performant, but unfortunately we cannot rely
+// on the full support (MySQL does not support conditional indexes)
+//
+// This function is auto-generated
+func (s *Store) {{ .fnIdent }}(ctx context.Context, res *{{ .goType }}) (err error) {
+	{{- range .checks }}
+	err = func() (err error) {
+		{{- range .fields }}
+			{{ if eq .goType "uint64" }}
+			if res.{{ .expIdent }} == 0 {
+				// skip check on empty values
+				return nil
+			}
+			{{ else }}
+			// handling string type as default
+			if len(res.{{ .expIdent }}) == 0 {
+				// skip check on empty values
+				return nil
+			}
+			{{ end }}
+		{{ end }}
+
+		{{- range .nullConstraint }}
+		if res.{{ .expIdent }} != nil {
+			// skip check if value is not nil
+			return nil
+		}
+  	{{ end }}
+
+		ex, err := s.{{ .lookupFnIdent }}(ctx, {{ range .fields }}res.{{ .expIdent }},{{ end }})
+		if err == nil && ex != nil && ex.ID != res.ID {
+			return store.ErrNotUnique.Stack(1)
+		} else if !errors.IsNotFound(err) {
+			return err
+		}
+
+		return nil
+	}()
+
+	if err != nil {
+		return
+	}
+	{{ end }}
+	return nil
+}
+{{ end }}
+{{ end }}
