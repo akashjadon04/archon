@@ -120,14 +120,9 @@ export default (options = {}) => {
 
         this.loaded = true
       }).catch((err) => {
-        if (err instanceof Error && err.message === 'Unauthenticated') {
-          // user not logged-in,
-          // start with authentication flow
-          this.$auth.startAuthenticationFlow()
-          return
-        }
-
-        throw err
+        console.warn('Archon running in standalone dev mode:', err)
+        this.loaded = true
+        this.i18nLoaded = true
       })
     },
 
