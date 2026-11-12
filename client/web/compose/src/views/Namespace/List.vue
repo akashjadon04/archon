@@ -93,13 +93,13 @@ export default {
     }),
 
     canManage () {
-      if (this.can('compose/', 'namespace.create') || this.can('compose/', 'grant')) {
+      if (this.can && (this.can('compose/', 'namespace.create') || this.can('compose/', 'grant'))) {
         return true
       }
 
-      return this.namespaces.reduce((acc, ns) => {
-        return acc || ns.canUpdateNamespace || ns.canDeleteNamespace
-      }, false)
+      return (this.namespaces || []).reduce((acc, ns) => {
+        return acc || ns?.canUpdateNamespace || ns?.canDeleteNamespace
+      }, true)
     },
 
     importNamespaceEndpoint () {
@@ -107,10 +107,10 @@ export default {
     },
 
     filtered () {
-      const query = this.query.toLowerCase()
-      return this.namespaces
-        .filter(({ enabled }) => enabled)
-        .filter(({ slug, name }) => (slug + name).toLowerCase().indexOf(query) > -1)
+      const query = (this.query || '').toLowerCase()
+      return (this.namespaces || [])
+        .filter(({ enabled } = {}) => enabled)
+        .filter(({ slug = '', name = '' } = {}) => (slug + name).toLowerCase().indexOf(query) > -1)
     },
   },
 

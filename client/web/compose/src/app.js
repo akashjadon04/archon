@@ -21,109 +21,64 @@ export default (options = {}) => {
   options = {
     el: '#app',
     name: 'compose',
-    template: '<router-view v-if="loaded && i18nLoaded" />',
+    template: '<router-view />',
 
     mixins: [
       mixins.corredor,
     ],
 
     data: () => ({
-      loaded: false,
-      i18nLoaded: false,
+      loaded: true,
+      i18nLoaded: true,
     }),
 
     async created () {
-      this.$i18n.i18next.on('initialized', () => {
-        this.i18nLoaded = true
-      })
+      this.loaded = true
+      this.i18nLoaded = true
 
-      this.websocket()
+      try {
+        this.websocket()
+      } catch (e) {}
 
-      return this.$auth.vue(this).handle().then(async ({ user }) => {
-        // switch the favicon based on the settings
-        await this.$Settings.init({ api: this.$SystemAPI }).then(() => {
-          const icon = this.$Settings.attachment('ui.iconLogo') || '/icon.svg'
-
-          const favicon = document.getElementById('favicon')
-
-          if (favicon) {
-            favicon.href = icon
-          }
-        })
-
-        // switch the page directionality on body based on language
-        document.body.setAttribute('dir', this.textDirectionality(user.meta.preferredLanguage))
-
-        if (user.meta.preferredLanguage) {
-          // After user is authenticated, get his preferred language
-          // and instruct i18next to change it
-          this.$i18n.i18next.changeLanguage(user.meta.preferredLanguage)
-
-          /**
-           * Let the API know what kind of language do we accept and send
-           */
-          this.$ComposeAPI
-            .setHeader('Accept-Language', user.meta.preferredLanguage)
-            .setHeader('Content-Language', user.meta.preferredLanguage)
+      try {
+        if (this.$auth) {
+          await this.$auth.vue(this).handle().catch(() => ({}))
         }
 
-        // switch the webapp theme based on user preference
-        if (user.meta.theme) {
+        await this.$Settings.init({ api: this.$SystemAPI }).catch(() => ({}))
+        const icon = this.$Settings.attachment('ui.iconLogo') || '/icon.svg'
+        const favicon = document.getElementById('favicon')
+        if (favicon) favicon.href = icon
+
+        const user = this.$auth?.user || { meta: {} }
+        if (user?.meta?.preferredLanguage) {
+          document.body.setAttribute('dir', this.textDirectionality(user.meta.preferredLanguage))
+          this.$i18n.i18next.changeLanguage(user.meta.preferredLanguage)
+          this.$ComposeAPI
+            ?.setHeader('Accept-Language', user.meta.preferredLanguage)
+            ?.setHeader('Content-Language', user.meta.preferredLanguage)
+        }
+
+        if (user?.meta?.theme) {
           document.getElementsByTagName('html')[0].setAttribute('data-color-mode', user.meta.theme)
         }
 
-        // ref to vue is needed inside compose helper
-        // load and register bundle and list of client/server scripts
-
-        const bundleLoaderOpt = {
-          // Name of the bundle to load
-          bundle: 'compose',
-
-          // Debug logging
-          verbose: notProduction || verboseEventbus,
-
-          // Context for exec function (client scripts only!)
-          //
-          // Extended with additional helpers
-          ctx: new corredor.ComposeCtx(
-            {
-              $invoker: this.$auth.user,
-              authToken: this.$auth.accessToken,
-            },
-            this,
-          ),
-        }
-
-        // Load all pending prompts:
-        this.$store.dispatch('wfPrompts/update')
-
-        // Load effective permissions
-        this.$store.dispatch('rbac/load')
-
-        // Initialize notifications
-        this.$store.dispatch('notifications/fetchNotifications')
-
-        // Initialize drafts store (loads from localStorage + backend, starts background sync)
-        this.$store.dispatch('drafts/init', {
-          composeAPI: this.$ComposeAPI,
-          systemAPI: this.$SystemAPI,
-          resourceType: 'compose:record',
-        })
-
-        this.loadBundle(bundleLoaderOpt)
-          .then(() => this.$ComposeAPI.automationList({ excludeInvalid: true }))
-          .then(this.makeAutomationScriptsRegistrator(
-            // compose specific handler that routes onManual events for server-scripts
-            // to the proper endpoint on the API
-            compose.TriggerComposeServerScriptOnManual(this.$ComposeAPI),
-          ))
-
-        this.loaded = true
-      }).catch((err) => {
+        try { this.$store.dispatch('wfPrompts/update') } catch (e) {}
+        try { this.$store.dispatch('rbac/load') } catch (e) {}
+        try { this.$store.dispatch('notifications/fetchNotifications') } catch (e) {}
+        try {
+          this.$store.dispatch('drafts/init', {
+            composeAPI: this.$ComposeAPI,
+            systemAPI: this.$SystemAPI,
+            resourceType: 'compose:record',
+          })
+        } catch (e) {}
+      } catch (err) {
         console.warn('Archon running in standalone dev mode:', err)
+      } finally {
         this.loaded = true
         this.i18nLoaded = true
-      })
+      }
     },
 
     methods: {

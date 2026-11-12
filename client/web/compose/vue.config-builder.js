@@ -156,14 +156,43 @@ module.exports = ({ appFlavour, appLabel, version = process.env.BUILD_VERSION, t
     },
 
     devServer: {
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       port: 8080,
       hot: true,
+      historyApiFallback: true,
       allowedHosts: 'all',
       webSocketServer: 'ws',
       liveReload: false,
       headers: {
         'Access-Control-Allow-Origin': '*',
+      },
+      setupMiddlewares: (middlewares, devServer) => {
+        devServer.app.get('/api/*', (req, res) => {
+          res.setHeader('Content-Type', 'application/json')
+          if (req.url.includes('/locale/')) {
+            return res.end(JSON.stringify({ response: {} }))
+          }
+          if (req.url.includes('/namespace/')) {
+            return res.end(
+              JSON.stringify({
+                response: {
+                  set: [
+                    {
+                      namespaceID: '1',
+                      name: 'CRM & Sales Operations',
+                      slug: 'crm',
+                      enabled: true,
+                      canUpdateNamespace: true,
+                      canDeleteNamespace: true,
+                    },
+                  ],
+                },
+              }),
+            )
+          }
+          return res.end(JSON.stringify({ response: {} }))
+        })
+        return middlewares
       },
 
       proxy: {

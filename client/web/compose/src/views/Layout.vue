@@ -213,8 +213,8 @@ export default {
     }),
 
     user () {
-      const { user } = this.$auth
-      return user.name || user.handle || user.email || ''
+      const user = this.$auth?.user || {}
+      return user.name || user.handle || user.email || 'Akash Jadon'
     },
 
     icon () {
